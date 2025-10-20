@@ -19,15 +19,69 @@ from PyQt5.QtWidgets import (
     QSplitter,
     QStyle,
     QSizePolicy,
+    QFrame,
 )
 from PyQt5.QtSerialPort import QSerialPortInfo
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt5.QtCore import Qt, QSize, pyqtSlot
+from PyQt5.QtCore import Qt, QSize, pyqtSlot, QTimer
 
 # Import modular components
-from stylesheets import DARK_STYLE, LIGHT_STYLE
+from stylesheets import (
+    DARK_STYLE,
+    LIGHT_STYLE,
+    DARK_GREEN,
+    DARK_RED,
+    LIGHT_GREEN,
+    LIGHT_RED,
+)
 from serial_worker import SerialWorker
 from gl_widget import OpenGLCubeWidget
+
+
+class StatusIndicator(QWidget):
+    """A custom widget to display a colored status indicator."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setFixedSize(16, 16)
+        self._status = "error"
+        self._is_dark = True
+
+        # Define colors for both themes
+        self.dark_colors = {
+            "ok": QColor(DARK_GREEN),
+            "error": QColor(DARK_RED),
+            "connecting": QColor("#F9E2AF"),  # Yellow
+        }
+        self.light_colors = {
+            "ok": QColor(LIGHT_GREEN),
+            "error": QColor(LIGHT_RED),
+            "connecting": QColor("#EE9928"),  # Orange
+        }
+        self.current_colors = self.dark_colors
+
+    def set_theme(self, is_dark):
+        """Updates the color palette based on the theme."""
+        self._is_dark = is_dark
+        self.current_colors = self.dark_colors if is_dark else self.light_colors
+        self.update()  # Trigger a repaint with the new colors
+
+    def setStatus(self, status):
+        """Sets the status and triggers a repaint."""
+        if status in self.current_colors:
+            self._status = status
+            self.update()  # Schedule a repaint
+
+    def paintEvent(self, event):
+        """Paints the status circle."""
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing)
+        color = self.current_colors.get(self._status, QColor("#808080"))
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+        # Draw a circle in the center of the widget, with a small margin
+        rect = self.rect().adjusted(1, 1, -1, -1)
+        painter.drawEllipse(rect)
 
 
 class IMUVisualiser(QMainWindow):
@@ -47,6 +101,17 @@ class IMUVisualiser(QMainWindow):
         self.is_dark_theme = self.preferences.get("theme", "dark") == "dark"
         self.last_data_time = time.time()
         self.data_update_count = 0
+        self.last_packet_timestamp = 0
+
+        # --- Connection Timeout Timer ---
+        self.connection_timeout_timer = QTimer(self)
+        self.connection_timeout_timer.setInterval(1000)  # Check every second
+        self.connection_timeout_timer.timeout.connect(self.check_connection_timeout)
+
+        # --- Render Timer ---
+        self.render_timer = QTimer(self)
+        self.render_timer.setInterval(16)  # Target ~60 FPS
+        self.render_timer.timeout.connect(self.update_gl_view)
 
         self._init_ui()
         self.apply_theme()
@@ -156,22 +221,28 @@ class IMUVisualiser(QMainWindow):
         self.connect_button.clicked.connect(self.toggle_connection)
         layout.addWidget(self.connect_button)
 
-        # Status "mini box" - now a styled QWidget, not QGroupBox
-        status_box = QWidget()
-        status_box.setObjectName("statusBox")
-        status_layout = QHBoxLayout(status_box)
-        status_layout.setContentsMargins(8, 5, 8, 5)
-        status_layout.setSpacing(15)
+        layout.addSpacing(15)
 
-        self.info_label = QLabel("Status: Disconnected")
+        # --- Status Indicator and Labels ---
+        self.status_indicator = StatusIndicator()
+        layout.addWidget(self.status_indicator)
+
+        self.info_label = QLabel()
         self.info_label.setObjectName("infoLabel")
-        self.set_info_label("Disconnected", "error")
-        status_layout.addWidget(self.info_label)
+        layout.addWidget(self.info_label)
 
-        self.rate_label = QLabel("Rate: 0.0 Hz")
+        line = QFrame()
+        line.setFrameShape(QFrame.VLine)
+        line.setFrameShadow(QFrame.Sunken)
+        layout.addWidget(line)
+
+        self.rate_label = QLabel()
         self.rate_label.setObjectName("rateLabel")
-        status_layout.addWidget(self.rate_label)
-        layout.addWidget(status_box)
+        layout.addWidget(self.rate_label)
+
+        # Set initial values
+        self.set_info_label("Disconnected", "error")
+        self.rate_label.setText("0.0 Hz")
 
         return group
 
@@ -203,10 +274,8 @@ class IMUVisualiser(QMainWindow):
         layout.addLayout(data_row_layout)
 
     def set_info_label(self, text, status_type):
-        self.info_label.setText(f"Status: {text}")
-        self.info_label.setProperty("status", status_type)
-        self.style().unpolish(self.info_label)
-        self.style().polish(self.info_label)
+        self.info_label.setText(text)
+        self.status_indicator.setStatus(status_type)
 
     def refresh_ports(self):
         self.port_combo.clear()
@@ -224,6 +293,8 @@ class IMUVisualiser(QMainWindow):
     def toggle_connection(self):
         if self.serial_worker and self.serial_worker.isRunning():
             self.serial_worker.stop()
+            self.connection_timeout_timer.stop()  # Stop timer on manual disconnect
+            self.render_timer.stop()  # Stop render timer
         else:
             port_name = self.port_combo.currentText()
             if not port_name:
@@ -232,7 +303,7 @@ class IMUVisualiser(QMainWindow):
 
             baud_rate = int(self.baud_combo.currentText())
             self.connect_button.setText("Disconnect")
-            self.set_info_label(f"Connecting...", "connecting")
+            self.set_info_label("Connecting...", "connecting")
 
             self.port_combo.setEnabled(False)
             self.baud_combo.setEnabled(False)
@@ -247,19 +318,36 @@ class IMUVisualiser(QMainWindow):
             self.last_data_time = time.time()
             self.data_update_count = 0
 
+            # Start the render timer
+            self.render_timer.start()
+
+    def check_connection_timeout(self):
+        """Called by QTimer to check for stale data."""
+        if self.serial_worker and self.serial_worker.isRunning():
+            # Check if more than 2 seconds have passed since the last packet
+            if time.time() - self.last_packet_timestamp > 2.0:
+                self.connection_timeout_timer.stop()
+                self.render_timer.stop()  # Stop render timer on timeout
+                self.handle_serial_error("Connection timed out")
+
     @pyqtSlot(str)
     def handle_serial_error(self, error_message):
+        self.connection_timeout_timer.stop()
+        self.render_timer.stop()
         self.set_info_label(error_message, "error")
         if self.serial_worker and self.serial_worker.isRunning():
             self.serial_worker.stop()
 
     @pyqtSlot()
     def on_worker_finished(self):
+        self.connection_timeout_timer.stop()
+        self.render_timer.stop()
         self.connect_button.setText("Connect")
-        if self.info_label.property("status") != "error":
+        # Only change status if it wasn't already set to an error
+        if self.status_indicator._status != "error":
             self.set_info_label("Disconnected", "error")
 
-        self.rate_label.setText("Rate: 0.0 Hz")
+        self.rate_label.setText("0.0 Hz")
         self.port_combo.setEnabled(True)
         self.baud_combo.setEnabled(True)
         self.refresh_ports_button.setEnabled(True)
@@ -267,9 +355,14 @@ class IMUVisualiser(QMainWindow):
 
     @pyqtSlot(str)
     def update_data(self, data):
+        # Update timestamp on every packet to reset the timeout
+        self.last_packet_timestamp = time.time()
+
         try:
-            if "Connecting" in self.info_label.text():
+            # If this is the first packet, change status and start the timeout timer
+            if self.status_indicator._status == "connecting":
                 self.set_info_label("Connected", "ok")
+                self.connection_timeout_timer.start()
 
             parts = [float(p.strip()) for p in data.split(",")]
             if len(parts) == 4:
@@ -279,17 +372,30 @@ class IMUVisualiser(QMainWindow):
                     return
                 q0, q1, q2, q3 = q0 / norm, q1 / norm, q2 / norm, q3 / norm
 
-                self.gl_widget.update_rotation(q0, q1, q2, q3)
+                # Set the quaternion variable, but DO NOT render
+                self.gl_widget.set_rotation(q0, q1, q2, q3)
+
+                # Update all text labels
                 self.q0_label.setText(f"q0 (W): {q0:.4f}")
                 self.q1_label.setText(f"q1 (X): {q1:.4f}")
                 self.q2_label.setText(f"q2 (Y): {q2:.4f}")
                 self.q3_label.setText(f"q3 (Z): {q3:.4f}")
                 self.update_euler_angles(q0, q1, q2, q3)
+
+                # This will now run at the full data speed
                 self.update_refresh_rate()
 
         except (ValueError, IndexError):
             print(f"Warning: Could not parse serial data: {data}")
             pass
+
+    @pyqtSlot()
+    def update_gl_view(self):
+        """
+        This slot is called by the render_timer (~60 FPS)
+        and just tells the GL widget to repaint itself.
+        """
+        self.gl_widget.updateGL()
 
     def update_euler_angles(self, w, x, y, z):
         sinr_cosp = 2 * (w * x + y * z)
@@ -310,7 +416,7 @@ class IMUVisualiser(QMainWindow):
         time_diff = current_time - self.last_data_time
         if time_diff >= 1.0:
             rate = self.data_update_count / time_diff
-            self.rate_label.setText(f"Rate: {rate:.1f} Hz")
+            self.rate_label.setText(f"{rate:.1f} Hz")
             self.last_data_time = current_time
             self.data_update_count = 0
 
@@ -318,6 +424,10 @@ class IMUVisualiser(QMainWindow):
         self.setStyleSheet(DARK_STYLE if self.is_dark_theme else LIGHT_STYLE)
         self.gl_widget.set_theme(self.is_dark_theme)
         self.theme_button.setText("☀️" if self.is_dark_theme else "🌙")
+
+        # Update status indicator theme if it has been created
+        if hasattr(self, "status_indicator"):
+            self.status_indicator.set_theme(self.is_dark_theme)
 
         # Recolor refresh icon to be light/contrasting for the button background
         style = self.style()

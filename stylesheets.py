@@ -53,11 +53,6 @@ DARK_STYLE = f"""
         padding-left: 10px;
     }}
     
-    /* Status-specific coloring */
-    QLabel#infoLabel[status="ok"] {{ color: {DARK_GREEN}; }}
-    QLabel#infoLabel[status="error"] {{ color: {DARK_RED}; font-weight: bold; }}
-    QLabel#rateLabel {{ color: #000000; }}
-    
     QComboBox, QPushButton {{
         min-height: 28px;
     }}
@@ -99,14 +94,6 @@ DARK_STYLE = f"""
         border-color: #45475A;
     }}
     QPushButton#refreshButton:disabled {{ background-color: #313244; }}
-
-    /* Status Box Style (now a QWidget) */
-    QWidget#statusBox {{
-        background-color: #313244;
-        border: 1px solid #45475A;
-        border-radius: 6px;
-    }}
-
 """
 
 LIGHT_STYLE = f"""
@@ -143,11 +130,6 @@ LIGHT_STYLE = f"""
         subcontrol-position: top left;
         padding-left: 10px;
     }}
-
-    /* Status-specific coloring */
-    QLabel#infoLabel[status="ok"] {{ color: {LIGHT_GREEN}; }}
-    QLabel#infoLabel[status="error"] {{ color: {LIGHT_RED}; font-weight: bold; }}
-    QLabel#rateLabel {{ color: #000000; }}
 
     QComboBox, QPushButton {{
         min-height: 28px;
@@ -190,11 +172,4 @@ LIGHT_STYLE = f"""
         border-color: #BCC0CC;
     }}
     QPushButton#refreshButton:disabled {{ background-color: #E6E9EF; }}
-
-    /* Status Box Style (now a QWidget) */
-    QWidget#statusBox {{
-        background-color: #DCE0E8;
-        border: 1px solid #BCC0CC;
-        border-radius: 6px;
-    }}
 """

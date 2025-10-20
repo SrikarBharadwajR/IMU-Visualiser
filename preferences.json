@@ -2,7 +2,7 @@
     "theme": "light",
     "last_baud": "115200",
     "splitter_sizes": [
-        875,
-        300
+        1411,
+        484
     ]
 }
