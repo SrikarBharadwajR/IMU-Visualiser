@@ -20,10 +20,12 @@ from PyQt5.QtWidgets import (
     QStyle,
     QSizePolicy,
     QFrame,
+    QTabWidget,
 )
 from PyQt5.QtSerialPort import QSerialPortInfo
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
-from PyQt5.QtCore import Qt, QSize, pyqtSlot, QTimer
+from PyQt5.QtCore import Qt, QSize, pyqtSlot, QTimer, pyqtSignal
+import os
 
 # Import modular components
 from stylesheets import (
@@ -36,6 +38,7 @@ from stylesheets import (
 )
 from serial_worker import SerialWorker
 from gl_widget import OpenGLCubeWidget
+from logger_widget import LoggerWidget
 
 
 class StatusIndicator(QWidget):
@@ -85,6 +88,9 @@ class StatusIndicator(QWidget):
 
 
 class IMUVisualiser(QMainWindow):
+    # Signal to send log data: (log_line, was_parsed_successfully)
+    log_entry_created = pyqtSignal(str, bool)
+
     def __init__(self):
         super().__init__()
 
@@ -117,6 +123,9 @@ class IMUVisualiser(QMainWindow):
         self.apply_theme()
         self.refresh_ports()
 
+        # Connect the logger signal
+        self.log_entry_created.connect(self.logger_widget.add_log_entry)
+
     def _init_ui(self):
         main_layout = QVBoxLayout(self.central_widget)
         main_layout.setContentsMargins(10, 10, 10, 10)
@@ -138,12 +147,11 @@ class IMUVisualiser(QMainWindow):
         vis_layout.addWidget(self.gl_widget)
         self.main_splitter.addWidget(vis_group)
 
-        # --- Right Pane (Data Display) ---
+        # --- Right Pane (Data Display Tabs) ---
         right_pane = QWidget()
         right_layout = QVBoxLayout(right_pane)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        self._create_data_display(right_layout)
-        right_layout.addStretch()
+        self._create_data_display_tabs(right_layout)
         self.main_splitter.addWidget(right_pane)
 
         # IMPORTANT: Set splitter sizes AFTER widgets have been added
@@ -246,7 +254,14 @@ class IMUVisualiser(QMainWindow):
 
         return group
 
-    def _create_data_display(self, layout):
+    def _create_data_display_tabs(self, parent_layout):
+        tab_widget = QTabWidget()
+
+        # --- Processed Data Tab ---
+        processed_tab = QWidget()
+        processed_layout = QVBoxLayout(processed_tab)
+        processed_layout.setAlignment(Qt.AlignTop)
+
         data_row_layout = QHBoxLayout()
 
         quat_group = QGroupBox("Quaternion Data")
@@ -271,7 +286,15 @@ class IMUVisualiser(QMainWindow):
         euler_layout.addWidget(self.yaw_label)
         data_row_layout.addWidget(euler_group)
 
-        layout.addLayout(data_row_layout)
+        processed_layout.addLayout(data_row_layout)
+        tab_widget.addTab(processed_tab, "Processed Data")
+
+        # --- Raw Serial Log Tab ---
+        logger_prefs = self.preferences.get("logger", {})
+        self.logger_widget = LoggerWidget(logger_prefs)
+        tab_widget.addTab(self.logger_widget, "Raw Serial Logs")
+
+        parent_layout.addWidget(tab_widget)
 
     def set_info_label(self, text, status_type):
         self.info_label.setText(text)
@@ -310,7 +333,7 @@ class IMUVisualiser(QMainWindow):
             self.refresh_ports_button.setEnabled(False)
 
             self.serial_worker = SerialWorker(port_name, baud_rate)
-            self.serial_worker.data_received.connect(self.update_data)
+            self.serial_worker.line_received.connect(self.handle_received_line)
             self.serial_worker.error_occurred.connect(self.handle_serial_error)
             self.serial_worker.finished.connect(self.on_worker_finished)
             self.serial_worker.start()
@@ -354,40 +377,44 @@ class IMUVisualiser(QMainWindow):
         self.serial_worker = None
 
     @pyqtSlot(str)
-    def update_data(self, data):
+    def handle_received_line(self, line):
         # Update timestamp on every packet to reset the timeout
         self.last_packet_timestamp = time.time()
 
-        try:
-            # If this is the first packet, change status and start the timeout timer
-            if self.status_indicator._status == "connecting":
-                self.set_info_label("Connected", "ok")
-                self.connection_timeout_timer.start()
+        # If this is the first packet, change status and start the timeout timer
+        if self.status_indicator._status == "connecting":
+            self.set_info_label("Connected", "ok")
+            self.connection_timeout_timer.start()
 
-            parts = [float(p.strip()) for p in data.split(",")]
+        parsed_successfully = False
+        try:
+            parts = [float(p.strip()) for p in line.split(",")]
             if len(parts) == 4:
                 q0, q1, q2, q3 = parts
                 norm = np.sqrt(q0**2 + q1**2 + q2**2 + q3**2)
-                if norm < 1e-6:
-                    return
-                q0, q1, q2, q3 = q0 / norm, q1 / norm, q2 / norm, q3 / norm
+                if norm > 1e-6:
+                    q0, q1, q2, q3 = q0 / norm, q1 / norm, q2 / norm, q3 / norm
 
-                # Set the quaternion variable, but DO NOT render
-                self.gl_widget.set_rotation(q0, q1, q2, q3)
+                    # Set the quaternion variable, but DO NOT render
+                    self.gl_widget.set_rotation(q0, q1, q2, q3)
 
-                # Update all text labels
-                self.q0_label.setText(f"q0 (W): {q0:.4f}")
-                self.q1_label.setText(f"q1 (X): {q1:.4f}")
-                self.q2_label.setText(f"q2 (Y): {q2:.4f}")
-                self.q3_label.setText(f"q3 (Z): {q3:.4f}")
-                self.update_euler_angles(q0, q1, q2, q3)
+                    # Update all text labels
+                    self.q0_label.setText(f"q0 (W): {q0:.4f}")
+                    self.q1_label.setText(f"q1 (X): {q1:.4f}")
+                    self.q2_label.setText(f"q2 (Y): {q2:.4f}")
+                    self.q3_label.setText(f"q3 (Z): {q3:.4f}")
+                    self.update_euler_angles(q0, q1, q2, q3)
 
-                # This will now run at the full data speed
-                self.update_refresh_rate()
+                    # This will now run at the speed of successfully parsed data
+                    self.update_refresh_rate()
+                    parsed_successfully = True
 
         except (ValueError, IndexError):
-            print(f"Warning: Could not parse serial data: {data}")
+            # This line could not be parsed as quaternion data
             pass
+
+        # Emit the log entry signal for the logger widget regardless of parse success
+        self.log_entry_created.emit(line, parsed_successfully)
 
     @pyqtSlot()
     def update_gl_view(self):
@@ -458,6 +485,7 @@ class IMUVisualiser(QMainWindow):
             "theme": "dark" if self.is_dark_theme else "light",
             "last_baud": self.baud_combo.currentText(),
             "splitter_sizes": self.main_splitter.sizes(),
+            "logger": self.logger_widget.get_settings(),
         }
         with open("preferences.json", "w") as f:
             json.dump(prefs, f, indent=4)
@@ -470,6 +498,9 @@ class IMUVisualiser(QMainWindow):
 
 
 if __name__ == "__main__":
+    if sys.platform.startswith("linux"):
+        os.environ["QT_QPA_PLATFORM"] = "xcb"
+
     app = QApplication(sys.argv)
     window = IMUVisualiser()
     window.show()

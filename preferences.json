@@ -2,7 +2,14 @@
     "theme": "light",
     "last_baud": "115200",
     "splitter_sizes": [
-        1411,
-        484
-    ]
+        1268,
+        627
+    ],
+    "logger": {
+        "show_parsed_only": false,
+        "add_timestamps": false,
+        "autoscroll": true,
+        "buffer_size": 5000,
+        "log_file_path": "/home/srikar/Projects/IMU_Visualiser/log.log"
+    }
 }

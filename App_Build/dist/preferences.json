@@ -1,0 +1,8 @@
+{
+    "theme": "dark",
+    "last_baud": "115200",
+    "splitter_sizes": [
+        1184,
+        711
+    ]
+}

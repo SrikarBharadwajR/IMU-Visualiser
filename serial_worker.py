@@ -12,7 +12,7 @@ class SerialWorker(QThread):
     Uses a polling loop with waitForReadyRead() and emits signals for data and errors.
     """
 
-    data_received = pyqtSignal(str)
+    line_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
     def __init__(self, port_name, baud_rate):
@@ -41,26 +41,22 @@ class SerialWorker(QThread):
                 self.error_occurred.emit("Device disconnected.")
                 break
 
+            # Wait up to 100ms for new data to arrive
             if self.serial_port.waitForReadyRead(100):
+                # Read all available lines
                 while self.serial_port.canReadLine():
                     if not self._is_running:
                         break
 
-                    try:
-                        data = (
-                            self.serial_port.readLine()
-                            .data()
-                            .decode(
-                                "utf-8", errors="strict"
-                            )  # Use strict to catch malformed data
-                            .strip()
-                        )
-                        if data:
-                            self.data_received.emit(data)
-                    except UnicodeDecodeError:
-                        # You could emit a specific error here if you often get corrupted data
-                        print("Warning: Serial data UTF-8 decode error.")
-                        pass
+                    # Read one line, decode safely, and strip whitespace
+                    data = (
+                        self.serial_port.readLine()
+                        .data()
+                        .decode("utf-8", errors="ignore")
+                        .strip()
+                    )
+                    # Emit every line, even if it's empty after stripping
+                    self.line_received.emit(data)
 
         if self.serial_port and self.serial_port.isOpen():
             self.serial_port.close()
