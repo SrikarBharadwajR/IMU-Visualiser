@@ -32,7 +32,6 @@ class OpenGLCubeWidget(QGLWidget):
         glEnable(GL_DEPTH_TEST)
         glEnable(GL_LIGHTING)
         glEnable(GL_LIGHT0)
-        # glLightfv(GL_LIGHT0, GL_POSITION, (0, 0, 1, 0))
         glLightModelfv(GL_LIGHT_MODEL_AMBIENT, [0.9, 0.9, 0.9, 1.0])
         glEnable(GL_COLOR_MATERIAL)
         glColorMaterial(GL_FRONT_AND_BACK, GL_AMBIENT_AND_DIFFUSE)
@@ -57,8 +56,6 @@ class OpenGLCubeWidget(QGLWidget):
         glTranslatef(0.0, 0.0, -5.0)
         glLightfv(GL_LIGHT0, GL_POSITION, [0.0, 0.0, 1.0, 0.0])
 
-        # paintGL will now just read the latest self.quaternion
-        # which is being set rapidly by update_data
         axis, angle = self.quaternion.getAxisAndAngle()
         glRotatef(angle, axis.x(), axis.z(), axis.y())
 
@@ -98,12 +95,12 @@ class OpenGLCubeWidget(QGLWidget):
         glMatrixMode(GL_MODELVIEW)
         glPopMatrix()
 
-    def set_rotation(self, q0, q1, q2, q3):
+    def set_rotation_from_quat(self, quat: QQuaternion):
         """
         Sets the rotation quaternion. This function does NOT
         trigger a repaint (updateGL).
         """
-        self.quaternion = QQuaternion(q0, q1, q2, q3)
+        self.quaternion = quat
 
     def set_theme(self, is_dark):
         self.is_dark_theme = is_dark

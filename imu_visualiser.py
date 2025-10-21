@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
     QTabWidget,
 )
 from PyQt5.QtSerialPort import QSerialPortInfo
-from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor
+from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QQuaternion
 from PyQt5.QtCore import Qt, QSize, pyqtSlot, QTimer, pyqtSignal
 import os
 
@@ -109,6 +109,10 @@ class IMUVisualiser(QMainWindow):
         self.data_update_count = 0
         self.last_packet_timestamp = 0
 
+        # Store the latest quaternion data here
+        self.current_quaternion = QQuaternion(1, 0, 0, 0)
+        self.new_data_available = False
+
         # --- Connection Timeout Timer ---
         self.connection_timeout_timer = QTimer(self)
         self.connection_timeout_timer.setInterval(1000)  # Check every second
@@ -116,8 +120,8 @@ class IMUVisualiser(QMainWindow):
 
         # --- Render Timer ---
         self.render_timer = QTimer(self)
-        self.render_timer.setInterval(16)  # Target ~60 FPS
-        self.render_timer.timeout.connect(self.update_gl_view)
+        self.render_timer.setInterval(16)  # Target ~60 FPS for rendering
+        self.render_timer.timeout.connect(self.update_gl_and_ui)
 
         self._init_ui()
         self.apply_theme()
@@ -209,7 +213,17 @@ class IMUVisualiser(QMainWindow):
         layout.addWidget(QLabel("Baud Rate:"))
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(
-            ["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"]
+            [
+                "9600",
+                "19200",
+                "38400",
+                "57600",
+                "115200",
+                "230400",
+                "460800",
+                "921600",
+                "1000000",
+            ]
         )
         self.baud_combo.setCurrentText(self.preferences.get("last_baud", "115200"))
         layout.addWidget(self.baud_combo)
@@ -242,15 +256,9 @@ class IMUVisualiser(QMainWindow):
         line = QFrame()
         line.setFrameShape(QFrame.VLine)
         line.setFrameShadow(QFrame.Sunken)
-        layout.addWidget(line)
-
-        self.rate_label = QLabel()
-        self.rate_label.setObjectName("rateLabel")
-        layout.addWidget(self.rate_label)
 
         # Set initial values
         self.set_info_label("Disconnected", "error")
-        self.rate_label.setText("0.0 Hz")
 
         return group
 
@@ -316,8 +324,8 @@ class IMUVisualiser(QMainWindow):
     def toggle_connection(self):
         if self.serial_worker and self.serial_worker.isRunning():
             self.serial_worker.stop()
-            self.connection_timeout_timer.stop()  # Stop timer on manual disconnect
-            self.render_timer.stop()  # Stop render timer
+            self.connection_timeout_timer.stop()
+            self.render_timer.stop()
         else:
             port_name = self.port_combo.currentText()
             if not port_name:
@@ -340,8 +348,6 @@ class IMUVisualiser(QMainWindow):
 
             self.last_data_time = time.time()
             self.data_update_count = 0
-
-            # Start the render timer
             self.render_timer.start()
 
     def check_connection_timeout(self):
@@ -349,8 +355,7 @@ class IMUVisualiser(QMainWindow):
         if self.serial_worker and self.serial_worker.isRunning():
             # Check if more than 2 seconds have passed since the last packet
             if time.time() - self.last_packet_timestamp > 2.0:
-                self.connection_timeout_timer.stop()
-                self.render_timer.stop()  # Stop render timer on timeout
+                self.render_timer.stop()
                 self.handle_serial_error("Connection timed out")
 
     @pyqtSlot(str)
@@ -370,7 +375,6 @@ class IMUVisualiser(QMainWindow):
         if self.status_indicator._status != "error":
             self.set_info_label("Disconnected", "error")
 
-        self.rate_label.setText("0.0 Hz")
         self.port_combo.setEnabled(True)
         self.baud_combo.setEnabled(True)
         self.refresh_ports_button.setEnabled(True)
@@ -395,18 +399,13 @@ class IMUVisualiser(QMainWindow):
                 if norm > 1e-6:
                     q0, q1, q2, q3 = q0 / norm, q1 / norm, q2 / norm, q3 / norm
 
-                    # Set the quaternion variable, but DO NOT render
-                    self.gl_widget.set_rotation(q0, q1, q2, q3)
+                    self.current_quaternion.setScalar(q0)
+                    self.current_quaternion.setX(q1)
+                    self.current_quaternion.setY(q2)
+                    self.current_quaternion.setZ(q3)
+                    self.new_data_available = True
 
-                    # Update all text labels
-                    self.q0_label.setText(f"q0 (W): {q0:.4f}")
-                    self.q1_label.setText(f"q1 (X): {q1:.4f}")
-                    self.q2_label.setText(f"q2 (Y): {q2:.4f}")
-                    self.q3_label.setText(f"q3 (Z): {q3:.4f}")
-                    self.update_euler_angles(q0, q1, q2, q3)
-
-                    # This will now run at the speed of successfully parsed data
-                    self.update_refresh_rate()
+                    self.data_update_count += 1
                     parsed_successfully = True
 
         except (ValueError, IndexError):
@@ -417,14 +416,27 @@ class IMUVisualiser(QMainWindow):
         self.log_entry_created.emit(line, parsed_successfully)
 
     @pyqtSlot()
-    def update_gl_view(self):
+    def update_gl_and_ui(self):
         """
-        This slot is called by the render_timer (~60 FPS)
-        and just tells the GL widget to repaint itself.
+        This slot is called by the render_timer and handles ALL UI updates.
         """
-        self.gl_widget.updateGL()
+        if self.new_data_available:
+            self.gl_widget.set_rotation_from_quat(self.current_quaternion)
+            self.gl_widget.updateGL()
+            self.update_data_labels(self.current_quaternion)
+            self.new_data_available = False
 
-    def update_euler_angles(self, w, x, y, z):
+        # self.update_refresh_rate()
+
+    def update_data_labels(self, q: QQuaternion):
+        """Updates all text labels based on the quaternion."""
+        self.q0_label.setText(f"q0 (W): {q.scalar():.4f}")
+        self.q1_label.setText(f"q1 (X): {q.x():.4f}")
+        self.q2_label.setText(f"q2 (Y): {q.y():.4f}")
+        self.q3_label.setText(f"q3 (Z): {q.z():.4f}")
+
+        # Calculate and update Euler angles
+        w, x, y, z = q.scalar(), q.x(), q.y(), q.z()
         sinr_cosp = 2 * (w * x + y * z)
         cosr_cosp = 1 - 2 * (x * x + y * y)
         roll = np.arctan2(sinr_cosp, cosr_cosp)
@@ -436,16 +448,6 @@ class IMUVisualiser(QMainWindow):
         self.roll_label.setText(f"Roll: {np.degrees(roll):.2f}°")
         self.pitch_label.setText(f"Pitch: {np.degrees(pitch):.2f}°")
         self.yaw_label.setText(f"Yaw: {np.degrees(yaw):.2f}°")
-
-    def update_refresh_rate(self):
-        self.data_update_count += 1
-        current_time = time.time()
-        time_diff = current_time - self.last_data_time
-        if time_diff >= 1.0:
-            rate = self.data_update_count / time_diff
-            self.rate_label.setText(f"{rate:.1f} Hz")
-            self.last_data_time = current_time
-            self.data_update_count = 0
 
     def apply_theme(self):
         self.setStyleSheet(DARK_STYLE if self.is_dark_theme else LIGHT_STYLE)
