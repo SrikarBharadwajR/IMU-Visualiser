@@ -1,7 +1,8 @@
-# serial_worker.py
-# This module contains the QThread worker for handling serial port communication.
-# This version uses a polling-based loop and emits signals for data and errors.
+# connection_workers.py
+# This module contains QThread workers for handling data connections.
+# Includes SerialWorker (for real hardware) and UdpWorker (for testing).
 
+import socket
 from PyQt5.QtCore import QThread, pyqtSignal, QIODevice
 from PyQt5.QtSerialPort import QSerialPort
 
@@ -56,7 +57,8 @@ class SerialWorker(QThread):
                         .strip()
                     )
                     # Emit every line, even if it's empty after stripping
-                    self.line_received.emit(data)
+                    if data:
+                        self.line_received.emit(data)
 
         if self.serial_port and self.serial_port.isOpen():
             self.serial_port.close()
@@ -69,3 +71,62 @@ class SerialWorker(QThread):
         if self.isRunning():
             self._is_running = False
             self.wait(500)  # Wait a bit for the thread to finish
+
+
+class UdpWorker(QThread):
+    """
+    Listens for UDP packets on a specific port and emits them as lines.
+    Used for the "Test Mode" feature.
+    """
+
+    line_received = pyqtSignal(str)
+    error_occurred = pyqtSignal(str)
+
+    def __init__(self, listen_port=12345):
+        super().__init__()
+        self.listen_port = listen_port
+        self.listen_host = "127.0.0.1"  # Listen on localhost only
+        self.sock = None
+        self._is_running = False
+
+    def run(self):
+        """The main logic of the thread."""
+        try:
+            self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self.sock.bind((self.listen_host, self.listen_port))
+            # Set a timeout so the loop can check _is_running
+            self.sock.settimeout(1.0)
+        except Exception as e:
+            self.error_occurred.emit(f"Failed to open UDP socket: {e}")
+            return
+
+        self._is_running = True
+        print(f"UDP worker started, listening on {self.listen_host}:{self.listen_port}")
+
+        while self._is_running:
+            try:
+                # Wait for data
+                data, addr = self.sock.recvfrom(1024)  # buffer size is 1024 bytes
+                line = data.decode("utf-8", errors="ignore").strip()
+                if line:
+                    self.line_received.emit(line)
+            except socket.timeout:
+                # This is expected, just loop again to check self._is_running
+                continue
+            except Exception as e:
+                if self._is_running:
+                    # Log other errors but don't crash
+                    print(f"UDP worker error: {e}")
+
+        if self.sock:
+            self.sock.close()
+
+        self.sock = None
+        print("UDP worker thread has finished.")
+
+    def stop(self):
+        """Stops the thread gracefully."""
+        if self.isRunning():
+            self._is_running = False
+            # Wait for the socket timeout to expire
+            self.wait(1500)

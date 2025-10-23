@@ -2,8 +2,8 @@
     "theme": "light",
     "last_baud": "1000000",
     "splitter_sizes": [
-        1258,
-        637
+        914,
+        981
     ],
     "logger": {
         "show_parsed_only": false,

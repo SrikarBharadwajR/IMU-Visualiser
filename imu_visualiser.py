@@ -21,6 +21,7 @@ from PyQt5.QtWidgets import (
     QSizePolicy,
     QFrame,
     QTabWidget,
+    QCheckBox,
 )
 from PyQt5.QtSerialPort import QSerialPortInfo
 from PyQt5.QtGui import QIcon, QPixmap, QPainter, QColor, QQuaternion
@@ -36,8 +37,8 @@ from stylesheets import (
     LIGHT_GREEN,
     LIGHT_RED,
 )
-from serial_worker import SerialWorker
-from gl_widget import OpenGLCubeWidget
+from connection_workers import SerialWorker, UdpWorker
+from pyvista_widget import PyVistaWidget
 from logger_widget import LoggerWidget
 
 
@@ -103,7 +104,7 @@ class IMUVisualiser(QMainWindow):
         self.central_widget = QWidget()
         self.setCentralWidget(self.central_widget)
 
-        self.serial_worker = None
+        self.connection_worker = None
         self.is_dark_theme = self.preferences.get("theme", "dark") == "dark"
         self.last_data_time = time.time()
         self.data_update_count = 0
@@ -147,7 +148,8 @@ class IMUVisualiser(QMainWindow):
         vis_group.setObjectName("VisualisationBox")
         vis_layout = QVBoxLayout(vis_group)
         vis_layout.setContentsMargins(5, 15, 5, 5)
-        self.gl_widget = OpenGLCubeWidget(self)
+        # Use the new PyVistaWidget
+        self.gl_widget = PyVistaWidget(self)
         vis_layout.addWidget(self.gl_widget)
         self.main_splitter.addWidget(vis_group)
 
@@ -158,7 +160,11 @@ class IMUVisualiser(QMainWindow):
         self._create_data_display_tabs(right_layout)
         self.main_splitter.addWidget(right_pane)
 
-        # IMPORTANT: Set splitter sizes AFTER widgets have been added
+        main_layout.addWidget(self.main_splitter, 1)
+
+    def showEvent(self, event):
+        """Called when the window is first shown."""
+        # Apply splitter sizes *after* the window is shown and has geometry
         splitter_sizes = self.preferences.get("splitter_sizes", [750, 450])
         if (
             splitter_sizes
@@ -167,11 +173,12 @@ class IMUVisualiser(QMainWindow):
         ):
             self.main_splitter.setSizes(splitter_sizes)
 
-        main_layout.addWidget(self.main_splitter, 1)
+        # Call the base class implementation
+        super().showEvent(event)
 
     def _create_top_bar(self):
         top_bar_layout = QHBoxLayout()
-        top_bar_layout.setContentsMargins(0, 0, 0, 0)
+        top_bar_layout.setContentsMargins(0, 10, 0, 0)
 
         # Logo
         self.logo_label = QLabel()
@@ -180,7 +187,7 @@ class IMUVisualiser(QMainWindow):
             pixmap.scaled(120, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation)
         )
         top_bar_layout.addWidget(self.logo_label)
-        top_bar_layout.addSpacing(15)
+        top_bar_layout.addSpacing(50)
 
         # Serial Port Controls
         serial_group = self._create_serial_controls()
@@ -200,17 +207,29 @@ class IMUVisualiser(QMainWindow):
         return top_bar_layout
 
     def _create_serial_controls(self):
-        group = QGroupBox("Serial Connections")
+        group = QGroupBox("Connections")
         layout = QHBoxLayout(group)
         layout.setSpacing(10)
 
-        layout.addWidget(QLabel("Port:"))
+        # --- Test Mode Checkbox ---
+        self.test_mode_check = QCheckBox("Test Mode")
+        self.test_mode_check.setToolTip(
+            "Bypass serial and listen for UDP test data on 127.0.0.1:12345"
+        )
+        self.test_mode_check.toggled.connect(self.on_test_mode_toggled)
+        layout.addWidget(self.test_mode_check)
+        layout.addSpacing(10)
+
+        # --- Serial Port Widgets ---
+        self.serial_port_label = QLabel("Port:")
+        layout.addWidget(self.serial_port_label)
         self.port_combo = QComboBox()
         layout.addWidget(self.port_combo)
 
         layout.addSpacing(5)
 
-        layout.addWidget(QLabel("Baud Rate:"))
+        self.serial_baud_label = QLabel("Baud Rate:")
+        layout.addWidget(self.serial_baud_label)
         self.baud_combo = QComboBox()
         self.baud_combo.addItems(
             [
@@ -237,6 +256,20 @@ class IMUVisualiser(QMainWindow):
         self.refresh_ports_button.clicked.connect(self.refresh_ports)
         layout.addWidget(self.refresh_ports_button)
 
+        # Store serial-only widgets
+        self.serial_widgets = [
+            self.serial_port_label,
+            self.port_combo,
+            self.serial_baud_label,
+            self.baud_combo,
+            self.refresh_ports_button,
+        ]
+
+        # --- Test Mode Widgets ---
+        self.test_port_label = QLabel("Listening on: 127.0.0.1:12345 (UDP)")
+        layout.addWidget(self.test_port_label)
+        self.test_port_label.setVisible(False)  # Hide by default
+
         # Connect Button
         self.connect_button = QPushButton("Connect")
         self.connect_button.setMinimumWidth(100)
@@ -252,10 +285,6 @@ class IMUVisualiser(QMainWindow):
         self.info_label = QLabel()
         self.info_label.setObjectName("infoLabel")
         layout.addWidget(self.info_label)
-
-        line = QFrame()
-        line.setFrameShape(QFrame.VLine)
-        line.setFrameShadow(QFrame.Sunken)
 
         # Set initial values
         self.set_info_label("Disconnected", "error")
@@ -304,6 +333,27 @@ class IMUVisualiser(QMainWindow):
 
         parent_layout.addWidget(tab_widget)
 
+    def set_serial_controls_enabled(self, enabled):
+        """Helper to enable/disable serial-specific controls."""
+        for widget in self.serial_widgets:
+            widget.setEnabled(enabled)
+
+    @pyqtSlot(bool)
+    def on_test_mode_toggled(self, is_checked):
+        """Shows/hides UI elements based on Test Mode state."""
+        # Show/hide serial vs test widgets
+        for widget in self.serial_widgets:
+            widget.setVisible(not is_checked)
+        self.test_port_label.setVisible(is_checked)
+
+        # If a connection is active, toggle it off
+        if self.connection_worker and self.connection_worker.isRunning():
+            self.toggle_connection()
+
+        # Update connect button text
+        self.connect_button.setText("Start Test" if is_checked else "Connect")
+        self.set_info_label("Disconnected", "error")
+
     def set_info_label(self, text, status_type):
         self.info_label.setText(text)
         self.status_indicator.setStatus(status_type)
@@ -322,29 +372,38 @@ class IMUVisualiser(QMainWindow):
             self.port_combo.setCurrentIndex(0)
 
     def toggle_connection(self):
-        if self.serial_worker and self.serial_worker.isRunning():
-            self.serial_worker.stop()
+        if self.connection_worker and self.connection_worker.isRunning():
+            self.connection_worker.stop()
             self.connection_timeout_timer.stop()
             self.render_timer.stop()
         else:
-            port_name = self.port_combo.currentText()
-            if not port_name:
-                self.set_info_label("No port selected!", "error")
-                return
+            is_test_mode = self.test_mode_check.isChecked()
 
-            baud_rate = int(self.baud_combo.currentText())
-            self.connect_button.setText("Disconnect")
-            self.set_info_label("Connecting...", "connecting")
+            if is_test_mode:
+                # --- Start Test (UDP) Worker ---
+                self.connect_button.setText("Stop Test")
+                self.set_info_label("Listening (UDP)...", "connecting")
+                self.connection_worker = UdpWorker(listen_port=12345)
 
-            self.port_combo.setEnabled(False)
-            self.baud_combo.setEnabled(False)
-            self.refresh_ports_button.setEnabled(False)
+            else:
+                # --- Start Serial Worker ---
+                port_name = self.port_combo.currentText()
+                if not port_name:
+                    self.set_info_label("No port selected!", "error")
+                    return
 
-            self.serial_worker = SerialWorker(port_name, baud_rate)
-            self.serial_worker.line_received.connect(self.handle_received_line)
-            self.serial_worker.error_occurred.connect(self.handle_serial_error)
-            self.serial_worker.finished.connect(self.on_worker_finished)
-            self.serial_worker.start()
+                baud_rate = int(self.baud_combo.currentText())
+                self.connect_button.setText("Disconnect")
+                self.set_info_label("Connecting...", "connecting")
+                self.set_serial_controls_enabled(False)
+
+                self.connection_worker = SerialWorker(port_name, baud_rate)
+
+            # --- Common Worker Setup ---
+            self.connection_worker.line_received.connect(self.handle_received_line)
+            self.connection_worker.error_occurred.connect(self.handle_serial_error)
+            self.connection_worker.finished.connect(self.on_worker_finished)
+            self.connection_worker.start()
 
             self.last_data_time = time.time()
             self.data_update_count = 0
@@ -352,7 +411,7 @@ class IMUVisualiser(QMainWindow):
 
     def check_connection_timeout(self):
         """Called by QTimer to check for stale data."""
-        if self.serial_worker and self.serial_worker.isRunning():
+        if self.connection_worker and self.connection_worker.isRunning():
             # Check if more than 2 seconds have passed since the last packet
             if time.time() - self.last_packet_timestamp > 2.0:
                 self.render_timer.stop()
@@ -363,22 +422,26 @@ class IMUVisualiser(QMainWindow):
         self.connection_timeout_timer.stop()
         self.render_timer.stop()
         self.set_info_label(error_message, "error")
-        if self.serial_worker and self.serial_worker.isRunning():
-            self.serial_worker.stop()
+        if self.connection_worker and self.connection_worker.isRunning():
+            self.connection_worker.stop()
 
     @pyqtSlot()
     def on_worker_finished(self):
         self.connection_timeout_timer.stop()
         self.render_timer.stop()
-        self.connect_button.setText("Connect")
+
+        # Update button text based on mode
+        is_test_mode = self.test_mode_check.isChecked()
+        self.connect_button.setText("Start Test" if is_test_mode else "Connect")
+
         # Only change status if it wasn't already set to an error
         if self.status_indicator._status != "error":
             self.set_info_label("Disconnected", "error")
 
-        self.port_combo.setEnabled(True)
-        self.baud_combo.setEnabled(True)
-        self.refresh_ports_button.setEnabled(True)
-        self.serial_worker = None
+        if not is_test_mode:
+            self.set_serial_controls_enabled(True)
+
+        self.connection_worker = None
 
     @pyqtSlot(str)
     def handle_received_line(self, line):
@@ -422,7 +485,8 @@ class IMUVisualiser(QMainWindow):
         """
         if self.new_data_available:
             self.gl_widget.set_rotation_from_quat(self.current_quaternion)
-            self.gl_widget.updateGL()
+            # PyVista's QtInteractor needs render() to be called
+            self.gl_widget.render()
             self.update_data_labels(self.current_quaternion)
             self.new_data_available = False
 
@@ -494,8 +558,8 @@ class IMUVisualiser(QMainWindow):
 
     def closeEvent(self, event):
         self.save_preferences()
-        if self.serial_worker and self.serial_worker.isRunning():
-            self.serial_worker.stop()
+        if self.connection_worker and self.connection_worker.isRunning():
+            self.connection_worker.stop()
         event.accept()
 
 
@@ -503,6 +567,10 @@ if __name__ == "__main__":
     if sys.platform.startswith("linux"):
         os.environ["QT_QPA_PLATFORM"] = "xcb"
 
+    # PyVista/VTK can have issues with styling, setting this env var can help
+    os.environ["QT_STYLE_OVERRIDE"] = ""
+
+    # Must construct QApplication *before* PyVista widget
     app = QApplication(sys.argv)
     window = IMUVisualiser()
     window.show()
