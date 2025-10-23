@@ -44,25 +44,17 @@ DARK_STYLE = f"""
         font-weight: bold;
     }}
     
-    /* Visualisation Box Style */
-    QGroupBox#VisualisationBox {{
-        border: 1px solid #45475A;
-    }}
-     QGroupBox#VisualisationBox::title {{
-        subcontrol-position: top left;
-        padding-left: 10px;
-    }}
-    
     QComboBox, QPushButton {{
         min-height: 28px;
     }}
-    QComboBox {{
+    QComboBox, QSpinBox {{
         background-color: #313244;
         border: 1px solid #45475A;
         border-radius: 5px; padding: 5px;
-        min-width: 80px;
+        min-width: 60px;
     }}
-    QComboBox:hover {{ background-color: #45475A; }}
+    QComboBox:hover, QSpinBox:hover {{ background-color: #45475A; }}
+    QSpinBox {{ padding: 2px; }}
 
     QPushButton {{
         background-color: {NEON_BLUE};
@@ -87,8 +79,51 @@ DARK_STYLE = f"""
     }}
     QPushButton#refreshButton:hover {{ background-color: {NEON_BLUE_HOVER}; }}
 
+    /* Tab styles */
+    QTabWidget::pane {{
+        border: 1px solid #45475A;
+        border-top: none;
+        border-radius: 0 0 5px 5px;
+    }}
+    QTabBar::tab {{
+        background: #313244;
+        border: 1px solid #45475A;
+        border-bottom: none;
+        padding: 8px 15px;
+        border-top-left-radius: 5px;
+        border-top-right-radius: 5px;
+    }}
+    QTabBar::tab:hover {{
+        background: #45475A;
+    }}
+    QTabBar::tab:selected {{
+        background: {DARK_BACKGROUND};
+        border: 1px solid {NEON_BLUE};
+        border-bottom: 1px solid {DARK_BACKGROUND};
+    }}
+
+    /* Dummy panel in grid view */
+    QFrame#dummyImuPanel {{
+        border: 2px dashed #45475A;
+        border-radius: 5px;
+        background-color: #313244;
+    }}
+    QFrame#dummyImuPanel {{
+        border: 2px dashed #45475A;
+        border-radius: 5px;
+        background-color: #313244;
+    }}
+
+    /* New style for grid panel title */
+    QLabel#ImuGridTitleLabel {{
+        background-color: #313244;
+        color: {NEON_BLUE_HOVER};
+        padding: 4px;
+        border-radius: 3px;
+        font-weight: bold;
+    }}
     /* Disabled Styles */
-    QComboBox:disabled, QPushButton:disabled {{
+    QComboBox:disabled, QPushButton:disabled, QSpinBox:disabled, QCheckBox:disabled {{
         background-color: #313244;
         color: #6C7086;
         border-color: #45475A;
@@ -122,25 +157,18 @@ LIGHT_STYLE = f"""
         font-weight: bold;
     }}
 
-    /* Visualisation Box Style */
-    QGroupBox#VisualisationBox {{
-        border: 1px solid #BCC0CC;
-    }}
-    QGroupBox#VisualisationBox::title {{
-        subcontrol-position: top left;
-        padding-left: 10px;
-    }}
-
     QComboBox, QPushButton {{
         min-height: 28px;
     }}
-    QComboBox {{
+    QComboBox, QSpinBox {{
         background-color: #FFFFFF;
         border: 1px solid #BCC0CC;
         border-radius: 5px; padding: 5px;
-        min-width: 80px;
+        min-width: 60px;
     }}
-    QComboBox:hover {{ background-color: #E6E9EF; }}
+    QComboBox:hover, QSpinBox:hover {{ background-color: #E6E9EF; }}
+    QSpinBox {{ padding: 2px; }}
+
     QPushButton {{
         background-color: {NEON_BLUE};
         color: #FFFFFF;
@@ -164,9 +192,51 @@ LIGHT_STYLE = f"""
     }}
     QPushButton#refreshButton:hover {{ background-color: {NEON_BLUE_HOVER}; }}
 
+    /* Tab styles */
+    QTabWidget::pane {{
+        border: 1px solid #BCC0CC;
+        border-top: none;
+        border-radius: 0 0 5px 5px;
+    }}
+    QTabBar::tab {{
+        background: #DCE0E8;
+        border: 1px solid #BCC0CC;
+        border-bottom: none;
+        padding: 8px 15px;
+        border-top-left-radius: 5px;
+        border-top-right-radius: 5px;
+    }}
+    QTabBar::tab:hover {{
+        background: #E6E9EF;
+    }}
+    QTabBar::tab:selected {{
+        background: {LIGHT_BACKGROUND};
+        border: 1px solid {NEON_BLUE};
+        border-bottom: 1px solid {LIGHT_BACKGROUND};
+    }}
 
+    /* Dummy panel in grid view */
+    QFrame#dummyImuPanel {{
+        border: 2px dashed #BCC0CC;
+        border-radius: 5px;
+        background-color: #E6E9EF;
+    }}
+    QFrame#dummyImuPanel {{
+        border: 2px dashed #BCC0CC;
+        border-radius: 5px;
+        background-color: #E6E9EF;
+    }}
+
+    /* New style for grid panel title */
+    QLabel#ImuGridTitleLabel {{
+        background-color: #DCE0E8;
+        color: {NEON_BLUE};
+        padding: 4px;
+        border-radius: 3px;
+        font-weight: bold;
+    }}
     /* Disabled Styles */
-    QComboBox:disabled, QPushButton:disabled {{
+    QComboBox:disabled, QPushButton:disabled, QSpinBox:disabled, QCheckBox:disabled {{
         background-color: #E6E9EF;
         color: #A6ADC8;
         border-color: #BCC0CC;

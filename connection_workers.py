@@ -13,6 +13,7 @@ class SerialWorker(QThread):
     Uses a polling loop with waitForReadyRead() and emits signals for data and errors.
     """
 
+    # This will eventually be updated to emit bytes too
     line_received = pyqtSignal(str)
     error_occurred = pyqtSignal(str)
 
@@ -75,11 +76,11 @@ class SerialWorker(QThread):
 
 class UdpWorker(QThread):
     """
-    Listens for UDP packets on a specific port and emits them as lines.
+    Listens for UDP packets on a specific port and emits them as raw bytes.
     Used for the "Test Mode" feature.
     """
 
-    line_received = pyqtSignal(str)
+    packet_received = pyqtSignal(bytes)  # Changed from line_received
     error_occurred = pyqtSignal(str)
 
     def __init__(self, listen_port=12345):
@@ -107,9 +108,8 @@ class UdpWorker(QThread):
             try:
                 # Wait for data
                 data, addr = self.sock.recvfrom(1024)  # buffer size is 1024 bytes
-                line = data.decode("utf-8", errors="ignore").strip()
-                if line:
-                    self.line_received.emit(line)
+                if data:
+                    self.packet_received.emit(data)  # Emit raw bytes
             except socket.timeout:
                 # This is expected, just loop again to check self._is_running
                 continue

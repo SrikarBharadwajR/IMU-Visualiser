@@ -42,10 +42,10 @@ class PyVistaWidget(QtInteractor):
     """
 
     def __init__(self, parent=None):
-        # We must initialize the QtInteractor with a QFrame as its parent
-        # This is a quirk of how pyvistaqt is designed
-        super_parent = QFrame(parent)
-        super(PyVistaWidget, self).__init__(parent=super_parent)
+        # *** FIX ***
+        # The QtInteractor IS a QFrame, so we just pass the parent to it.
+        # The old 'super_parent' QFrame was incorrect and caused rendering issues.
+        super(PyVistaWidget, self).__init__(parent=parent)
 
         # The 'plotter' is self
         self.plotter = self
@@ -53,10 +53,6 @@ class PyVistaWidget(QtInteractor):
         # --- 1. Create Cuboid with Face Colors ---
 
         # Create cuboid geometry matching old dimensions
-        # Old: w, d, h = 1.0, 0.6, 0.2
-        # X-axis (width) = 2.0 (2*w)
-        # Y-axis (height) = 0.4 (2*h)
-        # Z-axis (depth) = 1.2 (2*d)
         self.cuboid_mesh = pv.Cube(
             center=(0, 0, 0), x_length=2.0, y_length=0.4, z_length=1.2
         )
@@ -98,16 +94,12 @@ class PyVistaWidget(QtInteractor):
         )
 
         # Make the cuboid 'unlit' (shadeless) by adjusting its material
-        # This uses the full face color without directional shadows
         prop = self.cuboid_actor.GetProperty()
         prop.SetAmbient(0.9)  # Reflect 100% of ambient light (the face color)
         prop.SetDiffuse(0.0)  # Reflect 0% of directional light
         prop.SetSpecular(0.0)  # Reflect 0% of highlights
 
         # --- 2. Create and Add Rotating Axes (and 3D Labels) ---
-
-        # Define axis lengths
-        # Note the coordinate swap: IMU (Y=Up, Z=Fwd) -> VTK (Z=Up, Y=Fwd)
         x_axis_len = 1.25
         y_axis_len_imu = 0.75
         z_axis_len_imu = 0.5
@@ -122,7 +114,6 @@ class PyVistaWidget(QtInteractor):
         )  # VTK Z-axis uses IMU Y-length
 
         # Add axis actors with original colors
-        # Red (X), Green (Y), Blue (Z)
         self.x_axis_actor = self.plotter.add_mesh(
             x_axis, color=(1.0, 0.4, 0.4), line_width=3
         )
@@ -133,8 +124,7 @@ class PyVistaWidget(QtInteractor):
             z_axis_vtk, color=(0.6, 1.0, 0.6), line_width=3
         )  # Green for IMU Y
 
-        # === NEW 3D LABELS ===
-        # Create 3D Text geometry
+        # === 3D LABELS ===
         text_scale = 0.2
         text_x = (
             pv.Text3D("X", depth=0.1)
@@ -152,7 +142,6 @@ class PyVistaWidget(QtInteractor):
             .translate((0, z_axis_len_imu + 0.1, 0), inplace=True)
         )
 
-        # Add 3D text actors to the plotter
         self.x_label_actor = self.plotter.add_mesh(text_x, color=(1.0, 0.4, 0.4))  # Red
         self.y_label_actor = self.plotter.add_mesh(
             text_y, color=(0.6, 1.0, 0.6)
@@ -160,29 +149,22 @@ class PyVistaWidget(QtInteractor):
         self.z_label_actor = self.plotter.add_mesh(
             text_z, color=(0.6, 0.6, 1.0)
         )  # Blue (IMU Z)
-        # === END NEW 3D LABELS ===
 
         # --- 3. Link Actors to Transform ---
-
-        # Set up a *single* vtkTransform object for all rotating actors
         self.transform = vtk.vtkTransform()
         self.cuboid_actor.SetUserTransform(self.transform)
         self.x_axis_actor.SetUserTransform(self.transform)
         self.y_axis_actor.SetUserTransform(self.transform)
         self.z_axis_actor.SetUserTransform(self.transform)
-
-        # Add the new 3D label actors to the transform
         self.x_label_actor.SetUserTransform(self.transform)
         self.y_label_actor.SetUserTransform(self.transform)
         self.z_label_actor.SetUserTransform(self.transform)
 
         # --- 4. Set Camera and Disable Zoom/Pan ---
-
         self.plotter.camera_position = "iso"
         self.plotter.set_focus((0, 0, 0))  # Focus on the origin
         self.plotter.reset_camera()  # Frame all actors
 
-        # Set a custom interactor style that only allows rotation
         style = RotateOnlyInteractorStyle()
         self.plotter.interactor.SetInteractorStyle(style)
 
@@ -203,11 +185,7 @@ class PyVistaWidget(QtInteractor):
             edge_color = (0.1, 0.1, 0.1)  # Black
 
         self.plotter.set_background(color=bottom, top=top)
-
-        # Update edge color on the actor's property
         self.cuboid_actor.GetProperty().SetEdgeColor(edge_color)
-
-        # Re-render to show theme change
         self.plotter.render()
 
     def set_rotation_from_quat(self, quat: QQuaternion):
@@ -216,8 +194,6 @@ class PyVistaWidget(QtInteractor):
         """
         axis, angle = quat.getAxisAndAngle()
 
-        # Apply the same coordinate swap as the old OpenGL code
-        # Old: glRotatef(angle, axis.x(), axis.z(), axis.y())
         # vtk transform: RotateWXYZ(angle, vtk_x, vtk_y, vtk_z)
         # We map the IMU's (x, y, z) axis to VTK's (x, z, y)
         imu_x = axis.x()
@@ -228,9 +204,5 @@ class PyVistaWidget(QtInteractor):
         vtk_y = imu_z
         vtk_z = imu_y
 
-        # Update the single transform object
         self.transform.Identity()
         self.transform.RotateWXYZ(angle, vtk_x, vtk_y, vtk_z)
-
-        # All actors sharing this transform will be updated on the next .render()
-        # call from the main application.
